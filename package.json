@@ -1,0 +1,35 @@
+{
+  "name": "codex-to-claude",
+  "version": "1.0.0",
+  "description": "Auto-detect Codex built-in MCP servers & skills, and export ready-to-use configurations to Claude Code (Global or Project)",
+  "type": "module",
+  "bin": {
+    "codex-to-claude": "bin/cli.mjs"
+  },
+  "main": "./bin/cli.mjs",
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "start": "node ./bin/cli.mjs"
+  },
+  "keywords": [
+    "codex",
+    "claude-code",
+    "mcp",
+    "skills",
+    "computer-use",
+    "automation"
+  ],
+  "author": "cddchen",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
