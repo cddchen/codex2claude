@@ -1,6 +1,6 @@
 {
   "name": "codex-to-claude",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Auto-detect Codex built-in MCP servers & skills, and export ready-to-use configurations to Claude Code (Global or Project)",
   "type": "module",
   "bin": {

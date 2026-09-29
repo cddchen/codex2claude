@@ -166,137 +166,71 @@ description: Control local Mac apps through Computer Use. Use for tasks that req
 
 Control local macOS applications and browsers through UI automation, accessibility trees, and screen capture.
 
-Prefer purpose-built connectors, APIs, or CLIs when available; use Computer Use for interactions not exposed through a more specific interface.
+When this skill is invoked, the user explicitly requests direct GUI operations. Use \`cua_repl\` to interact with target applications or browsers. **Do NOT fall back to CLI tools, AppleScript (\`osascript\`), or background scripts to bypass GUI automation.**
 
 ---
 
-## 运行时通道 (Runtime Channels)
+## Runtime & Bootstrapping
 
-在当前环境中（已在 MCP 配置中启用），支持两种操作模式：
+All UI interactions run via the \`cua_repl\` MCP service (\`js\` tool). The global \`cua\` object is pre-injected into the runtime.
 
-### 模式 A：\`cua_repl\` / \`node_repl\` 代码驱动（推荐，支持批处理与长流程）
-通过 MCP 服务 \`cua_repl\` 或 \`node_repl\` 的 \`js\` 工具执行 JavaScript：
+### First Call Constraint (Acquire Target & Read Dynamic Docs)
+
+On your first call, or immediately after a \`js_reset\`, **you MUST execute exactly ONE entry API call** (e.g., getting a target application or inspecting global state). **Do NOT chain additional actions, waits, or screenshots in the first call.**
+
+**Core Mechanism**: The return value of the first call **automatically includes the full, latest TypeScript API specification and initial UI accessibility state**. Read this dynamic result first, then write specific interaction logic in subsequent calls.
 
 \`\`\`javascript
-// 在 cua_repl 中，全局 \`cua\` 对象已预置注入：
-const app = await cua.getApp("Finder");
-const state = await app.getAXState();
-nodeRepl.write(state);
-
-// 在 node_repl 中，按需引导加载 @oai/sky：
-globalThis.sky = (await import("@oai/sky")).sky;
-const state = await sky.get_app_state({ app: "Google Chrome" });
-nodeRepl.write(state.text);
+// Correct first call: bind target application and retain the persistent reference
+let app = await cua.getApp("Safari");
+// When target app is unknown: await cua.getState(); or await cua.listApps();
 \`\`\`
 
-### 模式 B：\`computer-use\` 直接 MCP 工具调用（简单单步操作）
-直接调用 \`computer-use\` MCP 暴露的原生工具：
-- \`list_apps()\`
-- \`get_app_state({ app, disableDiff? })\`
-- \`click({ app, element_index?, x?, y?, mouse_button?, click_count? })\`
-- \`type_text({ app, text })\`
-- \`press_key({ app, key })\`
-- \`scroll({ app, element_index?, x?, y?, direction, pages? })\`
-- \`drag({ app, from_x, from_y, to_x, to_y })\`
-- \`select_text({ app, element_index, text, prefix?, suffix?, selection_type? })\`
-- \`set_value({ app, element_index, value })\`
-- \`perform_secondary_action({ app, element_index, action })\`
-
----
-
-## 核心 API 规范 (TypeScript Surface)
-
-\`\`\`typescript
-type Vec2 = [x: number, y: number];
-type Direction = "up" | "down" | "left" | "right" | "u" | "d" | "l" | "r";
-type MouseButton = "left" | "right" | "middle" | "l" | "r" | "m";
-type SelectionType = "text" | "cursor_before" | "cursor_after";
-
-interface Target {
-  getAXState(options?: { disableDiffing?: boolean }): Promise<string>;
-  getScreenshot(): Promise<Uint8Array>;
-  click(target: number | Vec2, options?: { mouseButton?: MouseButton; clickCount?: number }): Promise<void>;
-  drag(from: Vec2, to: Vec2): Promise<void>;
-  pressKey(key: string): Promise<void>;
-  scroll(target: number | Vec2, direction: Direction, pages?: number): Promise<void>;
-  selectText(elementIndex: number, text: string, options?: { prefix?: string; suffix?: string; selectionType?: SelectionType }): Promise<void>;
-  setValue(elementIndex: number, value: string): Promise<void>;
-  typeText(text: string): Promise<void>;
-  paste(text: string, options?: { format?: "text" | "md" | "html" }): Promise<void>;
-  performSecondaryAction(elementIndex: number, action: string): Promise<void>;
+Do NOT use the following pattern on the first call (chaining actions/waits/screenshots is strictly prohibited):
+\`\`\`javascript
+// WRONG: Chaining multiple actions, delays, and screenshots in the first call
+{
+  const app = await cua.getApp("Simulator");
+  await app.drag([190, 250], [190, 750]);
+  await app.getScreenshot();
 }
-
-interface App extends Target {}
-
-interface Tab extends Target {
-  readonly id: string;
-  goto(url: string): Promise<void>;
-  back(): Promise<void>;
-  forward(): Promise<void>;
-  reload(): Promise<void>;
-  close(): Promise<void>;
-}
-
-declare const cua: {
-  getState(): Promise<any>;
-  getApp(app: string): Promise<App>;
-  listApps(): Promise<Array<{ id: string; displayName?: string; isRunning?: boolean }>>;
-  getBrowser(options?: { id?: string; url?: string }): Promise<any>;
-  createBrowserTab(browserId: string, url?: string): Promise<Tab>;
-  getTab(id: string): Promise<Tab>;
-  listTabs(): Promise<any[]>;
-};
 \`\`\`
 
 ---
 
-## 推荐交互工作流 (Workflow)
+## Claude Code Host Adaptations & Critical Pitfalls
 
-1. **初始应用探测**：
-   - 若明确已知应用名（如 Chrome、Finder、Slack），直接使用应用名或 Bundle ID 获取状态。
-   - 若未知，先调用 \`list_apps\` 或 \`cua.listApps()\`。
-   - 应用无需预先手动打开，\`get_app_state\` / \`cua.getApp\` 会透明在后台拉起目标应用。
+The underlying Computer Use capability was originally designed for Codex. When running under generic MCP hosts like Claude Code, **you must strictly follow these rules**:
 
-2. **优先使用 Accessibility 元素序号 (AX element_index)**：
-   - 优先通过 \`element_index\` 进行点击或输入，比绝对像素坐标更稳健。
-   - 每次关键交互后调用 \`getAXState()\` 或 \`get_app_state\`，刷新当前界面的可访问性树并获取最新索引。
-   - 默认使用树 Diff 增量提升性能；仅在视觉脱节时使用全量树或截图。
-
-3. **按键语法与注意事项**：
-   - \`press_key\` 支持 xdotool 风格语法：\`"Return"\`, \`"Tab"\`, \`"super+c"\`, \`"Up"\`, \`"KP_0"\` 等。
-   - \`type_text\` 中的换行符 \`\\n\` 会模拟按回车键，在表单或聊天应用中请格外注意避免误发送。
-
-4. **处理截图**：
-   - 当辅助功能树不足以表达上下文（如 Canvas 绘图、复杂网页布局、游戏）时，使用 \`getScreenshot()\` 获取屏幕画面。
+1. **Treat Safari & Desktop Browsers as Native Apps**:
+   Generic MCP clients do not provide Codex-proprietary session metadata (\`x-codex-turn-metadata\`). Calling browser tab management APIs (\`cua.listTabs()\` or \`cua.getBrowser()\`) will fail with: \`Missing required Codex turn metadata: session_id, turn_id\`.
+   **Correct usage**: Bind Safari and desktop browsers directly as Native Apps:
+   \`\`\`javascript
+   let safari = await cua.getApp("Safari");
+   await safari.getAXState();
+   await safari.click(index);
+   await safari.setValue(index, "text");
+   \`\`\`
+2. **Never Manually Import or Script Against \`@oai/sky\`**:
+   Always interact through the pre-injected \`cua\` interface. The underlying \`@oai/sky\` module uses a completely different flat parameter contract (e.g., \`sky.click({ app, element_index })\`), which will cause immediate failures if called like high-level methods.
+3. **Reset on Hangs or Errors**:
+   If an interaction times out, errors out, or the UI state becomes desynchronized, immediately call \`mcp__cua_repl__js_reset\` to reset the runtime kernel, then re-acquire the app reference. **Never attempt to reverse-engineer native closures using \`toString()\` or search internal filesystem temp directories.**
 
 ---
 
-## 安全确认策略 (Confirmations Policy)
+## Reliable Interaction Loop
 
-计算机操作直接作用于用户真实操作系统环境，必须遵循以下确认策略分级：
+After completing bootstrapping, reuse the persistent application variable across independent tool calls following this three-step loop:
 
-### 1. 严禁代劳 (Hand-Off Required - 必须由用户自行操作)
-- **[2.4]** 提交修改账户密码的最终确认步骤。
-- **[15]** 绕过浏览器/网络安全警示（如“您的连接不是私密连接”HTTPS 证书绕过、绕过付费墙）。
-
-### 2. 运行时强制确认 (Always Confirm at Action-Time - 即使预授权也必须阻断确认)
-- **[1] 删除数据**：删除云端/本地文件、邮件、日程、账号；本地图形界面下的删除操作。
-- **[2] 权限与凭证变更**：修改云数据访问权限、完成账号注册的最后一步、创建 API/OAuth Key、在浏览器保存密码或信用卡。
-- **[4] 验证码 (CAPTCHA)**：过人机验证。
-- **[8] 安装/运行新获取的软件**：安装或首次执行新下载的软件、安装浏览器扩展。
-- **[9] 对外代表性通讯**：发送邮件、发布社交媒体言论、提交工作申请/税单/表单、修改公开网站内容。
-- **[11] 金融交易**：转账、支付、订阅或取消订阅服务。
-- **[13] 本地系统敏感设置**：修改 VPN、系统安全设置、修改开机或管理员密码。
-
-### 3. 支持预授权操作 (Pre-Approval Works - 初始 Prompt 明确授权则无需再问)
-- **[2.3, 2.7] 登录**：如果用户初始 prompt 说明了“登录某个网站”，视为预授权；否则在跨站跳转时需确认。
-- **[6] 上传文件**：向目标服务上传文件。
-- **[12] 文件重命名与移动**：非删除性的本地文件归档与整理。
-- **[14] 传输敏感数据**：预授权中需明确包含“具体数据类型”与“明确的目标服务”。
-
-### 4. 始终允许操作 (No Confirmation Needed)
-- 接受 Cookie 声明及使用协议（ToS / Privacy Policy）。
-- 下载文件至本地目录。
-- 目标应用内的正常只读浏览、定位、阅读文本、查询等无副作用操作。
+1. **Observe**:
+   - Call \`await app.getAXState();\` to fetch the accessibility tree with \`element_index\` (default incremental diff mode).
+   - If visual context is lost or the window significantly changes, call \`await app.getAXState({ disableDiffing: true });\` for a full tree snapshot.
+   - When visual layout, canvas, or complex graphics need inspection, call \`await app.getScreenshot();\` to capture the window image.
+2. **Act**:
+   - **Prefer accessibility element indices**: \`await app.click(index);\` / \`await app.setValue(index, "text");\`.
+   - **Keyboard input**: \`await app.pressKey("Return");\` or \`await app.typeText("text");\` (note that \`\\n\` triggers Enter).
+   - **Gestures & scrolling**: \`await app.scroll(index, "down", 2);\` or \`await app.drag([x1, y1], [x2, y2]);\`.
+3. **Verify**:
+   - Always re-fetch state with \`await app.getAXState();\` after significant interactions to confirm that the UI transitioned as expected before proceeding.
 `;
 }
